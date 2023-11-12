@@ -11,6 +11,7 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 #[derive(Default)]
 struct State {
+    mouse_position: Option<Point<[f64; 2]>>,
     polylines: Vec<Polyline>,
 }
 
@@ -21,6 +22,12 @@ impl<T, const N: usize> std::ops::Index<usize> for Point<[T; N]> {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.0[index]
+    }
+}
+
+impl<T, const N: usize> std::ops::IndexMut<usize> for Point<[T; N]> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
     }
 }
 
@@ -54,7 +61,7 @@ pub fn main_js() -> Result<(), JsValue> {
 
     canvas
         .add_event_listener_with_callback(
-            "click",
+            "mouseup",
             Closure::<dyn FnMut(web_sys::MouseEvent)>::new({
                 let state = Rc::clone(&state);
                 move |event: web_sys::MouseEvent| {
@@ -63,10 +70,55 @@ pub fn main_js() -> Result<(), JsValue> {
                         polylines.push(Polyline::default());
                     }
                     let polyline = &mut polylines[0];
-                    polyline.vertices.push(Point([
-                        event.client_x() as f64,
-                        event.client_y() as f64,
-                    ]));
+                    polyline
+                        .vertices
+                        .push(Point([event.client_x() as f64, event.client_y() as f64]));
+                }
+            })
+            .into_js_value()
+            .unchecked_ref(),
+        )
+        .unwrap();
+
+    canvas
+        .add_event_listener_with_callback(
+            "mouseenter",
+            Closure::<dyn FnMut(web_sys::MouseEvent)>::new({
+                let state = Rc::clone(&state);
+                move |event: web_sys::MouseEvent| {
+                    state.borrow_mut().mouse_position =
+                        Some(Point([event.client_x() as f64, event.client_y() as f64]))
+                }
+            })
+            .into_js_value()
+            .unchecked_ref(),
+        )
+        .unwrap();
+
+    canvas
+        .add_event_listener_with_callback(
+            "mousemove",
+            Closure::<dyn FnMut(web_sys::MouseEvent)>::new({
+                let state = Rc::clone(&state);
+                move |event: web_sys::MouseEvent| {
+                    if let Some(mouse_position) = state.borrow_mut().mouse_position.as_mut() {
+                        mouse_position[0] = event.client_x() as f64;
+                        mouse_position[1] = event.client_y() as f64;
+                    }
+                }
+            })
+            .into_js_value()
+            .unchecked_ref(),
+        )
+        .unwrap();
+
+    canvas
+        .add_event_listener_with_callback(
+            "mouseleave",
+            Closure::<dyn FnMut(web_sys::MouseEvent)>::new({
+                let state = Rc::clone(&state);
+                move |_| {
+                    state.borrow_mut().mouse_position = None;
                 }
             })
             .into_js_value()
@@ -132,18 +184,51 @@ fn animation_frame_callback(context: Context) {
     }
 
     let rendering_context = &context.rendering_context;
+    let state = context.state.borrow();
 
+    rendering_context.clear_rect(0.0, 0.0, dimensions[0] as f64, dimensions[1] as f64);
+
+    // Draw finished polylines.
     rendering_context.begin_path();
-    for polyline in &context.state.borrow().polylines {
+    for polyline in &state.polylines {
         let mut vertices = polyline.vertices.iter();
         if let Some(vertex) = vertices.next() {
             rendering_context.move_to(vertex[0], vertex[1]);
-        }
-        for vertex in vertices {
-            rendering_context.line_to(vertex[0], vertex[1]);
+
+            for vertex in vertices {
+                rendering_context.line_to(vertex[0], vertex[1]);
+            }
         }
     }
+    rendering_context.set_stroke_style(&"#000000".into());
     rendering_context.stroke();
+    rendering_context.close_path();
+
+    // Draw to-be-drawn polyline segment.
+    if let (Some(a), Some(b)) = (
+        state.polylines.first().and_then(|x| x.vertices.last()),
+        &state.mouse_position,
+    ) {
+        rendering_context.begin_path();
+        rendering_context.move_to(a[0], a[1]);
+        rendering_context.line_to(b[0], b[1]);
+        rendering_context.set_stroke_style(&"#ff0000".into());
+        rendering_context.stroke();
+        rendering_context.close_path();
+    }
+
+    // Draw vertices
+    for vertex in state.polylines.iter().flat_map(|x| &x.vertices) {
+        rendering_context.begin_path();
+        rendering_context
+            .ellipse(vertex[0], vertex[1], 5.0, 5.0, 0.0, 0.0, 360.0)
+            .unwrap();
+        rendering_context.set_fill_style(&"rgb(100, 100, 200)".into());
+        rendering_context.fill();
+        rendering_context.close_path();
+    }
+
+    drop(state);
 
     context
         .window
