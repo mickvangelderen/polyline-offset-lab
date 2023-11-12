@@ -1,3 +1,9 @@
+# Polyline Offset Lab
+
+Playing with wasm and drawing an offset for a shape/bunch of connected line segments.
+
+![](media/intersecting-offsets.png)
+
 ## How to install
 
 ```sh
